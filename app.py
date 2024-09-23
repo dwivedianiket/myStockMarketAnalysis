@@ -91,7 +91,7 @@ def train_prophet_model(df):
     future = prophet_model.make_future_dataframe(periods=30)  # Forecasting for 30 minutes
     forecast = prophet_model.predict(future)
     
-    # Use the forecasted values for the next 30 time steps for comparison
+    # Using the forecasted values for the next 30 time steps for comparison
     predictions = forecast['yhat'][-len(df):].values  # Ensure it matches the original length
     return prophet_model, predictions, forecast
 
@@ -108,7 +108,7 @@ def predict_real_time(df, model, model_type='rf'):
     
     return prediction
 
-# Streamlit UI
+# Streamlit UI Design
 st.title('Comprehensive Stock Market Analysis and Trading Assistant')
 
 symbol = st.text_input('Enter Stock Symbol', 'AAPL')
@@ -123,19 +123,19 @@ if symbol:
 
         processed_data = preprocess_data(latest_data)
 
-        # Train models and get predictions
+        # Training models and getting predictions
         rf_model, rf_predictions = train_rf_model(processed_data)
         xgb_model, xgb_predictions = train_xgboost_model(processed_data)
         sarima_model, sarima_predictions = train_sarima_model(processed_data)
         prophet_model, prophet_predictions, _ = train_prophet_model(processed_data)
 
-        # Calculate MSE for each model
+        # Calculating MSE(Mean Squared Error) for each model
         rf_mse = mean_squared_error(processed_data['Close'], rf_predictions)
         xgb_mse = mean_squared_error(processed_data['Close'], xgb_predictions)
         sarima_mse = mean_squared_error(processed_data['Close'], sarima_predictions)
         prophet_mse = mean_squared_error(processed_data['Close'][-len(prophet_predictions):], prophet_predictions)
 
-        # Determine the best model
+        # best model selection
         mse_dict = {
             'Random Forest': rf_mse,
             'XGBoost': xgb_mse,
@@ -144,7 +144,7 @@ if symbol:
         }
         best_model = min(mse_dict, key=mse_dict.get)
 
-        # Display real-time predictions and best model
+        #real-time predictions and best model
         st.subheader("Real-Time Predictions")
         st.write(f"Random Forest Prediction: {rf_predictions[-1]}")
         st.write(f"XGBoost Prediction: {xgb_predictions[-1]}")
@@ -152,7 +152,7 @@ if symbol:
         st.write(f"Prophet Prediction: {prophet_predictions[-1]}")
         st.write(f"Best Model: {best_model} with Mean Squared Error is: {mse_dict[best_model]}")
 
-        # Plot Close Price
+        # Plotting Close Price
         st.subheader(f"{symbol} Stock Close Price")
         fig_close = go.Figure()
         fig_close.add_trace(go.Scatter(x=processed_data.index, y=processed_data['Close'], mode='lines', name='Close Price'))
@@ -196,7 +196,7 @@ if symbol:
         future = prophet_model.make_future_dataframe(periods=30)  # Forecasting for 30 minutes
         forecast = prophet_model.predict(future)
 
-        # Plot Prophet Forecast
+        # Plotting Prophet Forecast
         fig_prophet = go.Figure()
         fig_prophet.add_trace(go.Scatter(x=df_prophet['ds'], y=df_prophet['y'], mode='lines', name='Historical Close Price'))
         fig_prophet.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat'], mode='lines', name='Forecasted Close Price', line=dict(dash='dash')))
@@ -237,4 +237,4 @@ if symbol:
     except Exception as e:
         st.error(f"An error occurred: {e}")
 
-# streamlit run app.py
+# streamlit run app.py--code to run 
