@@ -237,4 +237,4 @@ if symbol:
     except Exception as e:
         st.error(f"An error occurred: {e}")
 
-# streamlit run app.py--code to run 
+# streamlit run app.py--code to run app 
