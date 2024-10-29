@@ -13,7 +13,7 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 from prophet import Prophet
 import streamlit as st
 
-API_KEY = 'HI06RNQVLCJCPT6U'  #Alpha Vantage API Key
+API_KEY = 'HI06RNQVLCJCPT6U'  # Alpha Vantage API Key
 
 def fetch_stock_data(symbol):
     url = f'https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={symbol}&interval=1min&apikey={API_KEY}'
@@ -51,6 +51,36 @@ def preprocess_data(df):
     df = df.replace([np.inf, -np.inf], np.nan).dropna()
     return df
 
+def generate_signals(df):
+    buy_signals = []
+    sell_signals = []
+    position = None
+
+    for i in range(len(df)):
+        if df['RSI'].iloc[i] < 30 and df['Close'].iloc[i] > df['SMA_10'].iloc[i]:  # Buy signal
+            if position != 'buy':
+                buy_signals.append(df['Close'].iloc[i])
+                sell_signals.append(np.nan)
+                position = 'buy'
+            else:
+                buy_signals.append(np.nan)
+                sell_signals.append(np.nan)
+        elif df['RSI'].iloc[i] > 70 and df['Close'].iloc[i] < df['SMA_10'].iloc[i]:  # Sell signal
+            if position != 'sell':
+                buy_signals.append(np.nan)
+                sell_signals.append(df['Close'].iloc[i])
+                position = 'sell'
+            else:
+                buy_signals.append(np.nan)
+                sell_signals.append(np.nan)
+        else:
+            buy_signals.append(np.nan)
+            sell_signals.append(np.nan)
+
+    df['Buy_Signal'] = buy_signals
+    df['Sell_Signal'] = sell_signals
+    return df
+
 def train_rf_model(df):
     X = df[['Open', 'High', 'Low', 'Volume', 'SMA_10', 'SMA_20', 'SMA_50', 'EMA_10', 'EMA_50', 
              'Volatility', 'Pct_Change', 'RSI', 'MACD']].values
@@ -83,18 +113,6 @@ def train_sarima_model(df):
     predictions = results.predict(start=0, end=len(df) - 1)
     return results, predictions
 
-def train_prophet_model(df):
-    df_prophet = df.reset_index().rename(columns={'index': 'ds', 'Close': 'y'})
-    prophet_model = Prophet()
-    prophet_model.fit(df_prophet)
-
-    future = prophet_model.make_future_dataframe(periods=30)  # Forecasting for 30 minutes
-    forecast = prophet_model.predict(future)
-    
-    # Using the forecasted values for the next 30 time steps for comparison
-    predictions = forecast['yhat'][-len(df):].values  # Ensure it matches the original length
-    return prophet_model, predictions, forecast
-
 def predict_real_time(df, model, model_type='rf'):
     X_real_time = df[['Open', 'High', 'Low', 'Volume', 'SMA_10', 'SMA_20', 'SMA_50', 'EMA_10', 
                        'EMA_50', 'Volatility', 'Pct_Change', 'RSI', 'MACD']].values[-1:]
@@ -108,133 +126,123 @@ def predict_real_time(df, model, model_type='rf'):
     
     return prediction
 
-# Streamlit UI Design
-st.title('Comprehensive Stock Market Analysis and Trading Assistant')
+def future_predictions(df, model, periods=5):
+    last_row = df.iloc[-1]
+    predictions = []
+    buy_sell_plan = []
 
-symbol = st.text_input('Enter Stock Symbol', 'AAPL')
-
-if symbol:
-    try:
-        latest_data = fetch_stock_data(symbol)
+    for i in range(periods):
+        # Create a new DataFrame for prediction
+        new_data = {
+            'Open': last_row['Close'],
+            'High': last_row['Close'],
+            'Low': last_row['Close'],
+            'Volume': last_row['Volume'],
+            'SMA_10': last_row['SMA_10'],
+            'SMA_20': last_row['SMA_20'],
+            'SMA_50': last_row['SMA_50'],
+            'EMA_10': last_row['EMA_10'],
+            'EMA_50': last_row['EMA_50'],
+            'Volatility': last_row['Volatility'],
+            'Pct_Change': last_row['Pct_Change'],
+            'RSI': last_row['RSI'],
+            'MACD': last_row['MACD']
+        }
         
-        # Title for raw data
-        st.subheader("Raw Stock Data")
-        st.write(latest_data)
+        new_row = pd.DataFrame([new_data])
+        prediction = model.predict(new_row.values)[0]
 
-        processed_data = preprocess_data(latest_data)
+        # Buy/Sell logic based on comparison with last close price
+        action = ''
+        if prediction > last_row['Close']:
+            action = 'Buy'
+        elif prediction < last_row['Close']:
+            action = 'Sell'
 
-        # Training models and getting predictions
-        rf_model, rf_predictions = train_rf_model(processed_data)
-        xgb_model, xgb_predictions = train_xgboost_model(processed_data)
-        sarima_model, sarima_predictions = train_sarima_model(processed_data)
-        prophet_model, prophet_predictions, _ = train_prophet_model(processed_data)
+        predictions.append({
+            'Predicted Price': prediction,
+            'Action': action
+        })
+        
+        # Record the date for future predictions
+        prediction_date = pd.Timestamp.now() + pd.Timedelta(minutes=(i + 1) * 1)  # Predicting at 1-minute intervals
+        buy_sell_plan.append({
+            'Date': prediction_date,
+            'Predicted Price': prediction,
+            'Action': action
+        })
+
+        last_row['Close'] = prediction  # Update the close price for the next prediction
+
+    return predictions, buy_sell_plan
+
+# Streamlit UI
+st.title("Stock Market Analysis and Trading Assistant")
+
+symbol = st.text_input("Enter Stock Symbol", "AAPL")
+if st.button("Fetch Data"):
+    try:
+        df = fetch_stock_data(symbol)
+        df = preprocess_data(df)
+        df = generate_signals(df)
+        
+        st.write("### Stock Data")
+        st.write(df)
+
+        rf_model, rf_predictions = train_rf_model(df)
+        xgb_model, xgb_predictions = train_xgboost_model(df)
+        sarima_model, sarima_predictions = train_sarima_model(df)
 
         # Calculating MSE(Mean Squared Error) for each model
-        rf_mse = mean_squared_error(processed_data['Close'], rf_predictions)
-        xgb_mse = mean_squared_error(processed_data['Close'], xgb_predictions)
-        sarima_mse = mean_squared_error(processed_data['Close'], sarima_predictions)
-        prophet_mse = mean_squared_error(processed_data['Close'][-len(prophet_predictions):], prophet_predictions)
+        rf_mse = mean_squared_error(df['Close'], rf_predictions)
+        xgb_mse = mean_squared_error(df['Close'], xgb_predictions)
+        sarima_mse = mean_squared_error(df['Close'], sarima_predictions)
 
-        # best model selection
+         # Best model selection
         mse_dict = {
             'Random Forest': rf_mse,
             'XGBoost': xgb_mse,
             'SARIMA': sarima_mse,
-            'Prophet': prophet_mse
         }
         best_model = min(mse_dict, key=mse_dict.get)
 
-        #real-time predictions and best model
+         # Real-time predictions and best model
         st.subheader("Real-Time Predictions")
         st.write(f"Random Forest Prediction: {rf_predictions[-1]}")
         st.write(f"XGBoost Prediction: {xgb_predictions[-1]}")
         st.write(f"SARIMA Prediction: {sarima_predictions[-1]}")
-        st.write(f"Prophet Prediction: {prophet_predictions[-1]}")
         st.write(f"Best Model: {best_model} with Mean Squared Error is: {mse_dict[best_model]}")
 
-        # Plotting Close Price
+         # Plotting Close Price
         st.subheader(f"{symbol} Stock Close Price")
         fig_close = go.Figure()
-        fig_close.add_trace(go.Scatter(x=processed_data.index, y=processed_data['Close'], mode='lines', name='Close Price'))
+        fig_close.add_trace(go.Scatter(x=df.index, y=df['Close'], mode='lines', name='Close Price'))
         st.plotly_chart(fig_close)
 
-        # Overlay Predictions on the Same Graph
+         # Overlay Predictions on the Same Graph
         st.subheader("Predictions Overlaid on Actual Prices")
         fig_overlay = go.Figure()
-        fig_overlay.add_trace(go.Scatter(x=processed_data.index, y=processed_data['Close'], mode='lines', name='Actual Close Price'))
-        fig_overlay.add_trace(go.Scatter(x=processed_data.index, y=rf_predictions, mode='lines', name='Random Forest Predictions'))
-        fig_overlay.add_trace(go.Scatter(x=processed_data.index, y=xgb_predictions, mode='lines', name='XGBoost Predictions'))
-        fig_overlay.add_trace(go.Scatter(x=processed_data.index, y=sarima_predictions, mode='lines', name='SARIMA Predictions'))
-        fig_overlay.add_trace(go.Scatter(x=processed_data.index[-len(prophet_predictions):], y=prophet_predictions, mode='lines', name='Prophet Predictions'))
+        fig_overlay.add_trace(go.Scatter(x=df.index, y=df['Close'], mode='lines', name='Actual Close Price'))
+        fig_overlay.add_trace(go.Scatter(x=df.index, y=rf_predictions, mode='lines', name='Random Forest Predictions'))
+        fig_overlay.add_trace(go.Scatter(x=df.index, y=xgb_predictions, mode='lines', name='XGBoost Predictions'))
+        fig_overlay.add_trace(go.Scatter(x=df.index, y=sarima_predictions, mode='lines', name='SARIMA Predictions'))
         fig_overlay.update_layout(title='Predictions Overlaid on Actual Prices', xaxis_title='Date', yaxis_title='Price')
         st.plotly_chart(fig_overlay)
 
-        # Technical Indicators Plot
-        fig_indicators = make_subplots(rows=3, cols=1, shared_xaxes=True)
-        
-        # SMA subplot
-        fig_indicators.add_trace(go.Scatter(x=processed_data.index, y=processed_data['SMA_10'], name="SMA 10"), row=1, col=1)
-        fig_indicators.add_trace(go.Scatter(x=processed_data.index, y=processed_data['SMA_20'], name="SMA 20"), row=1, col=1)
-        fig_indicators.add_trace(go.Scatter(x=processed_data.index, y=processed_data['SMA_50'], name="SMA 50"), row=1, col=1)
 
-        # EMA subplot
-        fig_indicators.add_trace(go.Scatter(x=processed_data.index, y=processed_data['EMA_10'], name="EMA 10"), row=2, col=1)
-        fig_indicators.add_trace(go.Scatter(x=processed_data.index, y=processed_data['EMA_50'], name="EMA 50"), row=2, col=1)
+        # Future Predictions
+        future_preds, buy_sell_plan = future_predictions(df, rf_model, periods=5)
 
-        # MACD subplot
-        fig_indicators.add_trace(go.Scatter(x=processed_data.index, y=processed_data['MACD'], name="MACD"), row=3, col=1)
-        
-        fig_indicators.update_layout(height=600, title_text=f"{symbol} Technical Indicators")
-        st.plotly_chart(fig_indicators)
+        st.write("### Future Predictions")
+        future_df = pd.DataFrame(future_preds)
+        st.write(future_df)
 
-        # Forecasting with Prophet
-        st.subheader("Forecasting with Prophet")
-        df_prophet = processed_data.reset_index().rename(columns={'index': 'ds', 'Close': 'y'})
-        prophet_model = Prophet()
-        prophet_model.fit(df_prophet)
-
-        future = prophet_model.make_future_dataframe(periods=30)  # Forecasting for 30 minutes
-        forecast = prophet_model.predict(future)
-
-        # Plotting Prophet Forecast
-        fig_prophet = go.Figure()
-        fig_prophet.add_trace(go.Scatter(x=df_prophet['ds'], y=df_prophet['y'], mode='lines', name='Historical Close Price'))
-        fig_prophet.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat'], mode='lines', name='Forecasted Close Price', line=dict(dash='dash')))
-        fig_prophet.update_layout(title='Prophet Forecast', xaxis_title='Date', yaxis_title='Price')
-        st.plotly_chart(fig_prophet)
-
-        # Feature Correlation Heatmap
-        st.subheader("Feature Correlation Heatmap")
-        corr = processed_data.corr()
-        fig_corr = px.imshow(corr, text_auto=True, color_continuous_scale='RdBu', title="Feature Correlation")
-        st.plotly_chart(fig_corr)
-
-        # Bollinger Bands Plot
-        st.subheader("Bollinger Bands")
-        fig_bollinger = go.Figure()
-        fig_bollinger.add_trace(go.Scatter(x=processed_data.index, y=processed_data['Close'], mode='lines', name='Close Price'))
-        fig_bollinger.add_trace(go.Scatter(x=processed_data.index, y=processed_data['Bollinger_High'], mode='lines', name='Bollinger High', line=dict(dash='dash')))
-        fig_bollinger.add_trace(go.Scatter(x=processed_data.index, y=processed_data['Bollinger_Low'], mode='lines', name='Bollinger Low', line=dict(dash='dash')))
-        fig_bollinger.update_layout(title='Bollinger Bands', xaxis_title='Date', yaxis_title='Price')
-        st.plotly_chart(fig_bollinger)
-
-        # RSI Plot
-        st.subheader("Relative Strength Index (RSI)")
-        fig_rsi = go.Figure()
-        fig_rsi.add_trace(go.Scatter(x=processed_data.index, y=processed_data['RSI'], mode='lines', name='RSI'))
-        fig_rsi.add_hline(y=70, line_color='red', line_dash='dash', annotation_text='Overbought', annotation_position='top right')
-        fig_rsi.add_hline(y=30, line_color='green', line_dash='dash', annotation_text='Oversold', annotation_position='bottom right')
-        fig_rsi.update_layout(title='Relative Strength Index (RSI)', xaxis_title='Date', yaxis_title='RSI')
-        st.plotly_chart(fig_rsi)
-
-        # Volume Plot
-        st.subheader("Volume")
-        fig_volume = go.Figure()
-        fig_volume.add_trace(go.Bar(x=processed_data.index, y=processed_data['Volume'], name='Volume'))
-        fig_volume.update_layout(title='Volume', xaxis_title='Date', yaxis_title='Volume')
-        st.plotly_chart(fig_volume)
+        # Display Buy/Sell Plan
+        st.write("### Buy/Sell Recommendations")
+        buy_sell_df = pd.DataFrame(buy_sell_plan)
+        st.write(buy_sell_df)
 
     except Exception as e:
-        st.error(f"An error occurred: {e}")
+        st.error(f"Error: {e}")
 
 # streamlit run app.py--code to run app 

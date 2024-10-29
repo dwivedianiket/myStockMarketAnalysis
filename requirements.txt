@@ -1,1 +1,10 @@
 streamlit
+requests
+pandas
+numpy
+plotly
+xgboost
+scikit-learn
+statsmodels
+prophet
+streamlit
